@@ -4,49 +4,197 @@ from tools.discord_bot import client, enviar_borrador
 from agents.ingesta import obtener_noticias, resumir_noticia
 from agents.generador import generar_copy
 from agents.scheduler import programar_post
-from config import DISCORD_BOT_TOKEN
+from tools.gemini import generar_texto
+from config import DISCORD_BOT_TOKEN, DISCORD_CHANNEL_ID
 
-async def procesar_noticia(noticia: dict) -> None:
-    print(f"\n📰 Procesando: {noticia['titulo']}")
-    
-    # resumir la noticia
-    resumen = resumir_noticia(noticia)
-    print(f"✅ Resumen generado")
-    
-    # generar copy para cada red
-    copies = generar_copy(resumen)
-    print(f"✅ Copies generados")
-    
-    # mandar cada copy a Discord para aprobación
-    for red, copy in copies.items():
+MAX_REINTENTOS = 3
+
+# ─── FLUJO DE APROBACION ───────────────────────────────────────
+
+async def aprobar_post(red: str, copy: str) -> None:
+    intentos = 0
+    copy_actual = copy
+
+    while intentos < MAX_REINTENTOS:
         future = asyncio.get_event_loop().create_future()
-        await enviar_borrador(red=red, copy=copy, future=future)
-        
+        await enviar_borrador(red=red, copy=copy_actual, future=future)
         decision = await future
-        
+
         if decision["accion"] == "aprobar":
-            programar_post(red=red, copy=copy)
+            programar_post(red=red, copy=copy_actual)
             print(f"✅ Post de {red} programado")
-            
+            return
+
         elif decision["accion"] == "rechazar":
             print(f"❌ Post de {red} rechazado")
-            
+            return
+
         elif decision["accion"] == "cambios":
-            print(f"✏️ Cambios solicitados para {red}: {decision['instrucciones']}")
-            # regenerar con las instrucciones
-            from tools.gemini import generar_texto
-            nuevo_copy = generar_texto(f"{decision['instrucciones']}\n\nCopy original:\n{copy}")
-            await enviar_borrador(red=red, copy=nuevo_copy, future=asyncio.get_event_loop().create_future())
+            intentos += 1
+            instrucciones = decision["instrucciones"]
+            print(f"✏️ Regenerando con cambios: {instrucciones}")
+            prompt = f"""
+            Tenés este copy para {red}:
+            {copy_actual}
+            
+            El community manager pidió estos cambios:
+            {instrucciones}
+            
+            Reescribí el copy aplicando los cambios pedidos.
+            """
+            loop = asyncio.get_event_loop()
+            copy_actual = await loop.run_in_executor(None, generar_texto, prompt)
+            if not copy_actual:
+                copy_actual = copy
+
+async def procesar_contenido(contenido: str) -> None:
+    loop = asyncio.get_event_loop()
+    copies = await loop.run_in_executor(None, generar_copy, contenido)
+    for red, copy in copies.items():
+        await aprobar_post(red=red, copy=copy)
+
+# ─── MODOS ────────────────────────────────────────────────────
+
+async def modo_noticias(cantidad: int) -> None:
+    print(f"\n🔍 Buscando {cantidad} noticias...")
+    loop = asyncio.get_event_loop()
+    noticias = await loop.run_in_executor(None, obtener_noticias, cantidad)
+    for noticia in noticias:
+        print(f"\n📰 {noticia['titulo']}")
+        resumen = await loop.run_in_executor(None, resumir_noticia, noticia)
+        if resumen:
+            await procesar_contenido(resumen)
+
+async def modo_clips(cantidad: int) -> None:
+    print(f"\n🎬 Buscando {cantidad} clips nuevos...")
+    try:
+        from tools.drive import obtener_carpeta_reciente, obtener_clips, cargar_procesados, guardar_procesado
+        loop = asyncio.get_event_loop()
+        carpeta = await loop.run_in_executor(None, obtener_carpeta_reciente)
+        if not carpeta:
+            print("❌ No se encontró carpeta de clips")
+            return
+        clips = await loop.run_in_executor(None, obtener_clips, carpeta["id"])
+        procesados = cargar_procesados()
+        clips_nuevos = [c for c in clips if c["id"] not in procesados][:cantidad]
+        for clip in clips_nuevos:
+            contenido = f"Clip del podcast Onrewire: {clip['name'].replace('.mp4', '').replace('_', ' ')}"
+            await procesar_contenido(contenido)
+            guardar_procesado(clip["id"])
+    except Exception as e:
+        print(f"❌ Error al procesar clips: {e}")
+
+# ─── MENU PRINCIPAL ───────────────────────────────────────────
+
+class MenuTipoView(discord.ui.View):
+    def __init__(self, future):
+        super().__init__(timeout=300)
+        self.future = future
+
+    @discord.ui.button(label="📰 Noticias", style=discord.ButtonStyle.primary)
+    async def noticias(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ Modo noticias seleccionado")
+        self.future.set_result("noticias")
+        self.stop()
+
+    @discord.ui.button(label="🎬 Clips", style=discord.ButtonStyle.primary)
+    async def clips(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ Modo clips seleccionado")
+        self.future.set_result("clips")
+        self.stop()
+
+    @discord.ui.button(label="📰 + 🎬 Ambos", style=discord.ButtonStyle.success)
+    async def ambos(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ Modo combinado seleccionado")
+        self.future.set_result("ambos")
+        self.stop()
+
+class MenuCantidadView(discord.ui.View):
+    def __init__(self, future):
+        super().__init__(timeout=300)
+        self.future = future
+
+    @discord.ui.button(label="1", style=discord.ButtonStyle.secondary)
+    async def uno(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ 1 publicación")
+        self.future.set_result(1)
+        self.stop()
+
+    @discord.ui.button(label="2", style=discord.ButtonStyle.secondary)
+    async def dos(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ 2 publicaciones")
+        self.future.set_result(2)
+        self.stop()
+
+    @discord.ui.button(label="3", style=discord.ButtonStyle.secondary)
+    async def tres(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ 3 publicaciones")
+        self.future.set_result(3)
+        self.stop()
+
+class MenuCombinado(discord.ui.View):
+    def __init__(self, future):
+        super().__init__(timeout=300)
+        self.future = future
+
+    @discord.ui.button(label="1 noticia + 1 clip", style=discord.ButtonStyle.secondary)
+    async def uno_uno(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ 1 noticia + 1 clip")
+        self.future.set_result((1, 1))
+        self.stop()
+
+    @discord.ui.button(label="2 noticias + 1 clip", style=discord.ButtonStyle.secondary)
+    async def dos_uno(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ 2 noticias + 1 clip")
+        self.future.set_result((2, 1))
+        self.stop()
+
+    @discord.ui.button(label="1 noticia + 2 clips", style=discord.ButtonStyle.secondary)
+    async def uno_dos(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ 1 noticia + 2 clips")
+        self.future.set_result((1, 2))
+        self.stop()
+
+async def menu_principal() -> None:
+    channel = client.get_channel(DISCORD_CHANNEL_ID)
+    if not channel:
+        print("❌ No se encontró el canal")
+        return
+
+    # pregunta tipo
+    future_tipo = asyncio.get_event_loop().create_future()
+    embed = discord.Embed(
+        title="📅 ¿Qué publicamos hoy?",
+        color=0x5865F2
+    )
+    await channel.send(embed=embed, view=MenuTipoView(future_tipo))
+    tipo = await future_tipo
+
+    if tipo == "ambos":
+        future_combinado = asyncio.get_event_loop().create_future()
+        await channel.send("¿Cuántos de cada uno?", view=MenuCombinado(future_combinado))
+        noticias_cant, clips_cant = await future_combinado
+        await modo_noticias(noticias_cant)
+        await modo_clips(clips_cant)
+
+    else:
+        future_cantidad = asyncio.get_event_loop().create_future()
+        await channel.send("¿Cuántas publicaciones hoy?", view=MenuCantidadView(future_cantidad))
+        cantidad = await future_cantidad
+
+        if tipo == "noticias":
+            await modo_noticias(cantidad)
+        elif tipo == "clips":
+            await modo_clips(cantidad)
+
+    await channel.send("✅ **Proceso completado. Todos los posts están programados.**")
+
+# ─── ENTRADA ──────────────────────────────────────────────────
 
 @client.event
 async def on_ready():
     print(f"✅ Bot conectado como {client.user}")
-    
-    # obtener noticias
-    noticias = obtener_noticias(max_noticias=1)
-    
-    for noticia in noticias:
-        await procesar_noticia(noticia)
+    await menu_principal()
 
 def main():
     client.run(DISCORD_BOT_TOKEN)
