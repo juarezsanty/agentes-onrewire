@@ -3,3 +3,6 @@ venv/
 __pycache__/
 programados.json
 imagenes/
+credentials.json
+token.json
+procesados.json

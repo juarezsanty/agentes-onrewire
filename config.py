@@ -19,3 +19,7 @@ HORARIOS_PUBLICACION = ["09:00", "14:00", "19:00"]
 
 # Redes activas
 REDES = ["instagram", "tiktok", "youtube"]
+
+MICROSOFT_CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID")
+MICROSOFT_CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET")
+MICROSOFT_TENANT_ID = os.getenv("MICROSOFT_TENANT_ID")
