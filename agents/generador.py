@@ -5,9 +5,14 @@ def cargar_prompt(red: str, contenido: str) -> str:
         prompt = f.read()
     return prompt.replace("{contenido}", contenido)
 
-def generar_copy(contenido: str) -> dict:
+def generar_copy(contenido: str, tipo: str = "noticia") -> dict:
+    if tipo == "noticia":
+        redes = ["instagram", "tiktok"]
+    else:
+        redes = ["instagram", "tiktok", "youtube"]
+
     copies = {}
-    for red in ["instagram", "tiktok", "youtube"]:
+    for red in redes:
         print(f"Generando copy para {red}...")
         prompt = cargar_prompt(red, contenido)
         copy = generar_texto(prompt)

@@ -47,10 +47,13 @@ async def aprobar_post(red: str, copy: str) -> None:
             if not copy_actual:
                 copy_actual = copy
 
-async def procesar_contenido(contenido: str) -> None:
+async def procesar_contenido(contenido: str, tipo: str = "noticia") -> None:
     loop = asyncio.get_event_loop()
-    copies = await loop.run_in_executor(None, generar_copy, contenido)
+    copies = await loop.run_in_executor(None, generar_copy, contenido, tipo)
     for red, copy in copies.items():
+        if not copy:
+            print(f"⚠️ Copy vacío para {red}, salteando...")
+            continue
         await aprobar_post(red=red, copy=copy)
 
 # ─── MODOS ────────────────────────────────────────────────────
@@ -63,7 +66,7 @@ async def modo_noticias(cantidad: int) -> None:
         print(f"\n📰 {noticia['titulo']}")
         resumen = await loop.run_in_executor(None, resumir_noticia, noticia)
         if resumen:
-            await procesar_contenido(resumen)
+            await procesar_contenido(resumen, "noticia")
 
 async def modo_clips(cantidad: int) -> None:
     print(f"\n🎬 Buscando {cantidad} clips nuevos...")
@@ -79,7 +82,7 @@ async def modo_clips(cantidad: int) -> None:
         clips_nuevos = [c for c in clips if c["id"] not in procesados][:cantidad]
         for clip in clips_nuevos:
             contenido = f"Clip del podcast Onrewire: {clip['name'].replace('.mp4', '').replace('_', ' ')}"
-            await procesar_contenido(contenido)
+            await procesar_contenido(contenido, "clip")
             guardar_procesado(clip["id"])
     except Exception as e:
         print(f"❌ Error al procesar clips: {e}")
@@ -161,7 +164,6 @@ async def menu_principal() -> None:
         print("❌ No se encontró el canal")
         return
 
-    # pregunta tipo
     future_tipo = asyncio.get_event_loop().create_future()
     embed = discord.Embed(
         title="📅 ¿Qué publicamos hoy?",
@@ -176,7 +178,6 @@ async def menu_principal() -> None:
         noticias_cant, clips_cant = await future_combinado
         await modo_noticias(noticias_cant)
         await modo_clips(clips_cant)
-
     else:
         future_cantidad = asyncio.get_event_loop().create_future()
         await channel.send("¿Cuántas publicaciones hoy?", view=MenuCantidadView(future_cantidad))

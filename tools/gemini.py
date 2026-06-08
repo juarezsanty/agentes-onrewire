@@ -5,7 +5,7 @@ from config import GEMINI_API_KEY
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-def generar_texto(prompt: str, reintentos: int = 3) -> str:
+def generar_texto(prompt: str, reintentos: int = 5) -> str:
     for intento in range(reintentos):
         try:
             response = client.models.generate_content(
@@ -15,7 +15,7 @@ def generar_texto(prompt: str, reintentos: int = 3) -> str:
             return response.text
         except Exception as e:
             if "503" in str(e) or "UNAVAILABLE" in str(e):
-                espera = (intento + 1) * 10
+                espera = (intento + 1) * 15
                 print(f"⏳ Gemini saturado, esperando {espera} segundos...")
                 time.sleep(espera)
             else:
