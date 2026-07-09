@@ -6,3 +6,4 @@ imagenes/
 credentials.json
 token.json
 procesados.json
+noticias_procesadas.json
