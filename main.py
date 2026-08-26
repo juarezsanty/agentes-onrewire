@@ -11,7 +11,7 @@ MAX_REINTENTOS = 3
 
 # ─── FLUJO DE APROBACION ───────────────────────────────────────
 
-async def aprobar_post(red: str, copy: str) -> None:
+async def aprobar_post(red: str, copy: str, contenido_completo: str = None) -> None:
     intentos = 0
     copy_actual = copy
 
@@ -21,7 +21,7 @@ async def aprobar_post(red: str, copy: str) -> None:
         decision = await future
 
         if decision["accion"] == "aprobar":
-            programar_post(red=red, copy=copy_actual)
+            programar_post(red=red, copy=copy_actual, contenido_completo=contenido_completo)
             print(f"✅ Post de {red} programado")
             return
 
@@ -47,14 +47,14 @@ async def aprobar_post(red: str, copy: str) -> None:
             if not copy_actual:
                 copy_actual = copy
 
-async def procesar_contenido(contenido: str, tipo: str = "noticia") -> None:
+async def procesar_contenido(contenido: str, tipo: str = "noticia", contenido_completo: str = None) -> None:
     loop = asyncio.get_event_loop()
     copies = await loop.run_in_executor(None, generar_copy, contenido, tipo)
     for red, copy in copies.items():
         if not copy:
             print(f"⚠️ Copy vacío para {red}, salteando...")
             continue
-        await aprobar_post(red=red, copy=copy)
+        await aprobar_post(red=red, copy=copy, contenido_completo=contenido_completo)
 
 # ─── MODOS ────────────────────────────────────────────────────
 
@@ -62,11 +62,58 @@ async def modo_noticias(cantidad: int) -> None:
     print(f"\n🔍 Buscando {cantidad} noticias...")
     loop = asyncio.get_event_loop()
     noticias = await loop.run_in_executor(None, obtener_noticias, cantidad)
+    
     for noticia in noticias:
         print(f"\n📰 {noticia['titulo']}")
-        resumen = await loop.run_in_executor(None, resumir_noticia, noticia)
-        if resumen:
-            await procesar_contenido(resumen, "noticia")
+        resultado = await loop.run_in_executor(None, resumir_noticia, noticia)
+        
+        if not resultado or not resultado["resumen"]:
+            continue
+
+        # aprobacion del resumen
+        resumen_actual = resultado["resumen_extendido"]
+        resumen_aprobado = False
+        
+        while not resumen_aprobado:
+            from tools.discord_bot import enviar_resumen_para_aprobar
+            future = asyncio.get_event_loop().create_future()
+            await enviar_resumen_para_aprobar(
+                titulo=resultado["titulo"],
+                resumen=resumen_actual,
+                link=resultado["link"],
+                future=future
+            )
+            decision = await future
+
+            if decision["accion"] == "aprobar":
+                # publica en el canal público
+                from tools.discord_bot import enviar_resumen_noticia
+                await enviar_resumen_noticia(
+                    titulo=resultado["titulo"],
+                    resumen=resumen_actual,
+                    link=resultado["link"]
+                )
+                resumen_aprobado = True
+
+            elif decision["accion"] == "rechazar":
+                print(f"❌ Resumen rechazado")
+                resumen_aprobado = True
+
+            elif decision["accion"] == "cambios":
+                instrucciones = decision["instrucciones"]
+                prompt = f"""
+                Tenés este resumen:
+                {resumen_actual}
+                
+                El editor pidió estos cambios:
+                {instrucciones}
+                
+                Reescribí el resumen aplicando los cambios.
+                """
+                resumen_actual = await loop.run_in_executor(None, generar_texto, prompt)
+
+        # procesa copies para las redes
+        await procesar_contenido(resultado["resumen"], "noticia", resultado["contenido_completo"])
 
 async def modo_clips(cantidad: int) -> None:
     print(f"\n🎬 Buscando {cantidad} clips nuevos...")

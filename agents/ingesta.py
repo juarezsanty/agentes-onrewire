@@ -3,6 +3,9 @@ import json
 import os
 from tools.gemini import generar_texto
 import time
+import requests
+from bs4 import BeautifulSoup
+import html
 
 FEEDS_IA = [
     # inglés - muy activos
@@ -53,8 +56,8 @@ def obtener_noticias(max_noticias: int = 1) -> list:
                         continue
 
                 candidatas.append({
-                    "titulo": entry.title,
-                    "resumen": entry.get("summary", ""),
+                    "titulo": html.unescape(entry.title),
+                    "resumen": html.unescape(entry.get("summary", "")),
                     "link": entry.link,
                     "fuente": feed.feed.get("title", ""),
                     "fecha": fecha_publicacion
@@ -96,15 +99,58 @@ def obtener_noticias(max_noticias: int = 1) -> list:
     except:
         return candidatas[:max_noticias]
 
-def resumir_noticia(noticia: dict) -> str:
-    prompt = f"""
-    Resumí esta noticia sobre IA en 3 líneas en español, 
-    de forma clara y directa:
+def obtener_contenido_completo(url: str) -> str:
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        # si hay bloqueo de seguridad devuelve None
+        if "security" in response.text.lower() or "javascript" in response.text.lower() or "checkpoint" in response.text.lower():
+            print(f"⚠️ Sitio bloqueado por seguridad: {url}")
+            return None
+            
+        soup = BeautifulSoup(response.content, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        texto = soup.get_text(separator="\n", strip=True)
+        return texto[:3000]
+    except Exception as e:
+        print(f"⚠️ No se pudo obtener contenido completo: {e}")
+        return None
+
+def resumir_noticia(noticia: dict) -> dict:
+    contenido = obtener_contenido_completo(noticia["link"])
+    
+    base = contenido if contenido else noticia["resumen"]
+
+    # resumen corto para el copy
+    prompt_corto = f"""
+    Resumí esta noticia sobre IA en 3 líneas en español para redes sociales:
     
     Título: {noticia['titulo']}
-    Resumen original: {noticia['resumen']}
+    Contenido: {base}
     """
-    resultado = generar_texto(prompt)
-    if resultado:
+    resumen_corto = generar_texto(prompt_corto)
+
+    # resumen extendido para Discord
+    prompt_extendido = f"""
+    Hacé un resumen detallado en español de esta noticia sobre IA.
+    Debe tener entre 150 y 250 palabras.
+    Incluí los puntos más importantes, datos relevantes y contexto.
+    No uses bullet points, escribí en párrafos.
+    
+    Título: {noticia['titulo']}
+    Contenido: {base}
+    """
+    resumen_extendido = generar_texto(prompt_extendido)
+
+    if resumen_corto:
         guardar_noticia_procesada(noticia["link"])
-    return resultado
+
+    return {
+        "resumen": resumen_corto,
+        "resumen_extendido": resumen_extendido,
+        "contenido_completo": base,
+        "titulo": noticia["titulo"],
+        "link": noticia["link"]
+    }

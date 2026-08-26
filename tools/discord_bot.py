@@ -77,5 +77,83 @@ class AccionesView(discord.ui.View):
         await interaction.response.send_message("✏️ Escribí qué cambios querés hacer:")
         self.esperando_cambios = True
 
+async def enviar_resumen_noticia(titulo: str, resumen: str, link: str) -> None:
+    await client.wait_until_ready()
+    from config import DISCORD_NOTICIAS_CHANNEL_ID
+    channel = client.get_channel(DISCORD_NOTICIAS_CHANNEL_ID)
+
+    if not channel:
+        print("❌ No se encontró el canal de noticias")
+        return
+
+    embed = discord.Embed(
+        title=f"📰 {titulo}",
+        description=resumen,
+        color=0x57F287
+    )
+    embed.add_field(name="🔗 Fuente", value=link, inline=False)
+    
+    await channel.send(embed=embed)
+    print(f"✅ Resumen enviado al canal de noticias")
+
+async def enviar_resumen_para_aprobar(titulo: str, resumen: str, link: str, future) -> None:
+    await client.wait_until_ready()
+    channel = client.get_channel(DISCORD_CHANNEL_ID)
+
+    if not channel:
+        print("❌ No se encontró el canal")
+        return
+
+    embed = discord.Embed(
+        title=f"📰 Resumen para aprobar — {titulo}",
+        description=resumen,
+        color=0xFEE75C
+    )
+    embed.add_field(name="🔗 Fuente", value=link, inline=False)
+
+    view = AprobacionResumenView(
+        titulo=titulo,
+        resumen=resumen,
+        link=link,
+        future=future
+    )
+    views_activas.append(view)
+    await channel.send(embed=embed, view=view)
+
+class AprobacionResumenView(discord.ui.View):
+    def __init__(self, titulo: str, resumen: str, link: str, future):
+        super().__init__(timeout=None)
+        self.titulo = titulo
+        self.resumen = resumen
+        self.link = link
+        self.future = future
+        self.esperando_cambios = False
+
+    @discord.ui.button(label="✅ Aprobar", style=discord.ButtonStyle.success)
+    async def aprobar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.followup.send("✅ Resumen aprobado, publicando en el canal...")
+        if self.future and not self.future.done():
+            self.future.set_result({"accion": "aprobar", "resumen": self.resumen})
+        if self in views_activas:
+            views_activas.remove(self)
+        self.stop()
+
+    @discord.ui.button(label="❌ Rechazar", style=discord.ButtonStyle.danger)
+    async def rechazar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.followup.send("❌ Resumen rechazado.")
+        if self.future and not self.future.done():
+            self.future.set_result({"accion": "rechazar"})
+        if self in views_activas:
+            views_activas.remove(self)
+        self.stop()
+
+    @discord.ui.button(label="✏️ Pedir cambios", style=discord.ButtonStyle.secondary)
+    async def cambios(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        await interaction.followup.send("✏️ Escribí qué cambios querés hacer:")
+        self.esperando_cambios = True
+
 def iniciar_bot():
     client.run(DISCORD_BOT_TOKEN)

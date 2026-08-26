@@ -6,3 +6,4 @@ langchain-google-genai==4.2.4
 feedparser==6.0.12
 msal==1.37.0
 requests==2.34.2
+beatufulsoup4==4.15.0
