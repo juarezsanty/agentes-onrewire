@@ -15,10 +15,9 @@ def guardar_programados(posts: list) -> None:
     with open(ARCHIVO_PROGRAMADOS, "w", encoding="utf-8") as f:
         json.dump(posts, f, ensure_ascii=False, indent=2)
 
-def programar_post(red: str, copy: str) -> dict:
+def programar_post(red: str, copy: str, contenido_completo: str = None) -> dict:
     posts = cargar_programados()
     
-    # busca el próximo horario disponible
     hoy = datetime.now().strftime("%Y-%m-%d")
     horarios_usados = [p["horario"] for p in posts if p["fecha"] == hoy and p["red"] == red]
     
@@ -36,7 +35,8 @@ def programar_post(red: str, copy: str) -> dict:
         "copy": copy,
         "fecha": hoy,
         "horario": horario_elegido,
-        "estado": "programado"
+        "estado": "programado",
+        "contenido_completo": contenido_completo
     }
 
     posts.append(post)
