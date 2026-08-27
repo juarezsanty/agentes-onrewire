@@ -19,10 +19,12 @@ async def on_message(message: discord.Message):
     for view in views_activas:
         if hasattr(view, 'esperando_cambios') and view.esperando_cambios:
             if not view.future.done():
+                # detecta si es resumen o copy
+                contenido = getattr(view, 'resumen', None) or getattr(view, 'copy', None)
                 view.future.set_result({
                     "accion": "cambios",
                     "instrucciones": message.content,
-                    "copy": view.copy
+                    "copy": contenido
                 })
             view.stop()
             views_activas.remove(view)
