@@ -4,6 +4,8 @@ __pycache__/
 programados.json
 imagenes/
 credentials.json
+credentials_drive.json
 token.json
 procesados.json
 noticias_procesadas.json
+token_drive.json
