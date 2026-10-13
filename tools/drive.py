@@ -59,7 +59,8 @@ def obtener_clips(carpeta_id: str) -> list:
         service = obtener_servicio()
         results = service.files().list(
             q=f"'{carpeta_id}' in parents and (mimeType='video/mp4' or mimeType='video/quicktime' or mimeType='video/x-msvideo')",
-            fields="files(id, name, mimeType)"
+            orderBy="createdTime asc",
+            fields="files(id, name, mimeType, createdTime, size)"
         ).execute()
         
         clips = results.get("files", [])
@@ -68,6 +69,20 @@ def obtener_clips(carpeta_id: str) -> list:
     except Exception as e:
         print(f"❌ Error al obtener clips: {e}")
         return []
+
+def descargar_clip(clip_id: str, nombre: str) -> str:
+    from googleapiclient.http import MediaIoBaseDownload
+    import io
+    service = obtener_servicio()
+    request = service.files().get_media(fileId=clip_id)
+    ruta = f"temp_{nombre}"
+    with io.FileIO(ruta, "wb") as f:
+        downloader = MediaIoBaseDownload(f, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+            print(f"⬇️ Descargando {int(status.progress() * 100)}%")
+    return ruta
 
 def cargar_procesados() -> list:
     if not os.path.exists("procesados.json"):

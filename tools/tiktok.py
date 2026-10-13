@@ -32,18 +32,27 @@ def obtener_token(code: str) -> dict:
 def publicar_video(access_token: str, video_path: str, descripcion: str) -> dict:
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json; charset=UTF-8"
     }
     
-    # endpoint de borrador en lugar de publicación directa
+    video_size = os.path.getsize(video_path)
+    
+    # Endpoint de PUBLICACIÓN DIRECTA (Content Posting API)
     init_response = requests.post(
-        f"{BASE_URL}/post/publish/inbox/video/init/",
+        f"{BASE_URL}/post/publish/video/init/",
         headers=headers,
         json={
+            "post_info": {
+                "title": descripcion,  # Captura el copy generado por Gemini
+                "privacy_level": "SELF_ONLY",  # Obligatorio en modo Sandbox (Privado)
+                "disable_duet": False,
+                "disable_stitch": False,
+                "disable_comment": False
+            },
             "source_info": {
                 "source": "FILE_UPLOAD",
-                "video_size": os.path.getsize(video_path),
-                "chunk_size": os.path.getsize(video_path),
+                "video_size": video_size,
+                "chunk_size": video_size,
                 "total_chunk_count": 1
             }
         }
@@ -61,7 +70,7 @@ def publicar_video(access_token: str, video_path: str, descripcion: str) -> dict
         print(f"❌ No se obtuvo URL de upload: {init_response.text}")
         return None
     
-    # sube el video
+    # Subida de los bytes del video a la URL firmada
     with open(video_path, "rb") as f:
         video_data = f.read()
     
@@ -79,5 +88,5 @@ def publicar_video(access_token: str, video_path: str, descripcion: str) -> dict
         print(f"❌ Error al subir video: {upload_response.text}")
         return None
     
-    print(f"✅ Video subido como borrador, publish_id: {publish_id}")
+    print(f"✅ Video publicado con éxito en modo Privado, publish_id: {publish_id}")
     return {"publish_id": publish_id}

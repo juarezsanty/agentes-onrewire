@@ -1,5 +1,6 @@
 import asyncio
 import discord
+import os
 from tools.discord_bot import client, enviar_borrador
 from agents.ingesta import obtener_noticias, resumir_noticia
 from agents.generador import generar_copy
@@ -118,19 +119,103 @@ async def modo_noticias(cantidad: int) -> None:
 async def modo_clips(cantidad: int) -> None:
     print(f"\n🎬 Buscando {cantidad} clips nuevos...")
     try:
-        from tools.drive import obtener_carpeta_reciente, obtener_clips, cargar_procesados, guardar_procesado
+        from tools.drive import obtener_carpeta_reciente, obtener_clips, cargar_procesados, guardar_procesado, descargar_clip
+        from tools.discord_bot import enviar_clip_para_aprobar, preguntar_rechazo_clip
+        from tools.tiktok import publicar_video
+        
         loop = asyncio.get_event_loop()
         carpeta = await loop.run_in_executor(None, obtener_carpeta_reciente)
         if not carpeta:
             print("❌ No se encontró carpeta de clips")
             return
+        
         clips = await loop.run_in_executor(None, obtener_clips, carpeta["id"])
         procesados = cargar_procesados()
         clips_nuevos = [c for c in clips if c["id"] not in procesados][:cantidad]
+        
+        print(f"✅ {len(clips_nuevos)} clips nuevos para procesar")
+        
         for clip in clips_nuevos:
-            contenido = f"Clip del podcast Onrewire: {clip['name'].replace('.mp4', '').replace('_', ' ')}"
-            await procesar_contenido(contenido, "clip")
-            guardar_procesado(clip["id"])
+            print(f"\n🎬 Procesando clip: {clip['name']}")
+            
+            # primero descarga el clip
+            print(f"⬇️ Descargando clip...")
+            ruta = await loop.run_in_executor(None, descargar_clip, clip["id"], clip["name"])
+            
+            try:
+                # genera el copy usando el video
+                contenido = f"Clip del podcast Onrewire: {clip['name'].replace('.mp4', '').replace('_', ' ')}"
+                copies = await loop.run_in_executor(None, generar_copy, contenido, "clip", ruta)
+                
+                aprobado_en_alguna_red = False
+                
+                for red, copy in copies.items():
+                    if not copy:
+                        continue
+                    
+                    intentos = 0
+                    copy_actual = copy
+                    red_procesada = False
+                    
+                    while not red_procesada and intentos < MAX_REINTENTOS:
+                        future = asyncio.get_event_loop().create_future()
+                        await enviar_clip_para_aprobar(
+                            red=red,
+                            copy=copy_actual,
+                            video_path=ruta,
+                            future=future
+                        )
+                        decision = await future
+                        
+                        if decision["accion"] == "aprobar":
+                            if red == "tiktok":
+                                from config import TIKTOK_ACCESS_TOKEN
+                                resultado = await loop.run_in_executor(
+                                    None, publicar_video, TIKTOK_ACCESS_TOKEN, ruta, copy_actual
+                                )
+                                if resultado:
+                                    print(f"✅ Video subido a TikTok")
+                            
+                            programar_post(red=red, copy=copy_actual)
+                            aprobado_en_alguna_red = True
+                            red_procesada = True
+                        
+                        elif decision["accion"] == "rechazar":
+                            print(f"❌ Post de {red} rechazado")
+                            red_procesada = True
+                        
+                        elif decision["accion"] == "cambios":
+                            intentos += 1
+                            instrucciones = decision["instrucciones"]
+                            prompt = f"""
+                            Tenés este copy para {red}:
+                            {copy_actual}
+                            
+                            El community manager pidió estos cambios:
+                            {instrucciones}
+                            
+                            Reescribí el copy aplicando los cambios pedidos.
+                            """
+                            copy_actual = await loop.run_in_executor(None, generar_texto, prompt)
+                            if not copy_actual:
+                                copy_actual = copy
+                
+                # si se aprobó en al menos una red marca como procesado
+                if aprobado_en_alguna_red:
+                    guardar_procesado(clip["id"])
+                else:
+                    # rechazado en todas las redes, pregunta qué hacer
+                    future_rechazo = asyncio.get_event_loop().create_future()
+                    await preguntar_rechazo_clip(future_rechazo)
+                    accion_rechazo = await future_rechazo
+                    if accion_rechazo == "nunca":
+                        guardar_procesado(clip["id"])
+                        
+            finally:
+                if os.path.exists(ruta):
+                    os.remove(ruta)
+                    print(f"🗑️ Archivo temporal eliminado")
+                    
     except Exception as e:
         print(f"❌ Error al procesar clips: {e}")
 
